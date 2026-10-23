@@ -39,6 +39,8 @@
     setInterval(report, 2000);
 
     function showIdle() { v.style.display = "none"; idle.style.display = "flex"; }
+    function idle_() { showIdle(); st("waiting", "Sharing stopped. Waiting…"); }
+    function blocked() { st("blocked", "Someone is sharing, but this network can't reach their computer. Still trying…"); }
     function showVideo(stream) {
       v.srcObject = stream; v.muted = false;
       var p = v.play();
@@ -62,16 +64,26 @@
         call.on("close", function () { showIdle(); st("waiting", "Sharing stopped. Waiting…"); });
       });
       peer.on("error", function (e) {
-        if (e.type === "peer-unavailable") st("waiting", "Waiting for someone to share…");
+        if (e.type === "peer-unavailable") { absentAt = Date.now(); if (state !== "waiting") st("waiting", "Waiting for someone to share…"); }
         else st("error", "Connection problem: " + e.type);
       });
       peer.on("disconnected", function () { try { peer.reconnect(); } catch (e) {} });
     }
+    // One attempt at a time. If the sharer exists (the server didn't say "no such code") but no link
+    // forms within 12 s, this network can't reach theirs directly: say so, and keep trying.
+    var tryAt = 0, absentAt = 0;
     function connect() {
-      if (!peer || peer.destroyed) return;
+      if (!peer || peer.destroyed || peer.disconnected) return;
       if (conn && conn.open) return;
-      conn = peer.connect("bsss-" + code.toLowerCase(), { reliable: true });
-      conn.on("close", function () { conn = null; showIdle(); st("waiting", "Sharing stopped. Waiting…"); });
+      var sharerThere = absentAt < tryAt;
+      if (conn && sharerThere && Date.now() - tryAt < 12000) return;          // still trying
+      if (conn && sharerThere && state !== "playing" && state !== "showing") blocked();
+      var old = conn; conn = null; try { if (old) old.close(); } catch (e) {}
+      tryAt = Date.now();
+      var c = peer.connect("bsss-" + code.toLowerCase(), { reliable: true });
+      conn = c;
+      c.on("open", function () { if (state === "blocked") st("waiting", "Connected. Waiting for the picture…"); });
+      c.on("close", function () { if (conn === c) { conn = null; idle_(); } });
     }
     // Keep trying until someone shares (and again after they stop)
     var lastAgain = 0;
