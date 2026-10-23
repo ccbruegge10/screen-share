@@ -1,0 +1,86 @@
+<!doctype html>
+<!-- Screen Share (test) viewer: the world's screen opens this page as viewer.html#code=ABCDE and it shows
+     whatever is being shared to that code. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Screen Share Viewer</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0c11; overflow: hidden; font-family: sans-serif; }
+    video { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; object-fit: contain; background: #000; display: none; }
+    #idle { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #c9c3d6; text-align: center; }
+    #idle .big { font: 700 120px/1 monospace; letter-spacing: .15em; color: #fff; margin: 18px 0; }
+    #idle .small { font-size: 34px; }
+    #idle .tiny { font-size: 24px; color: #7d768c; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <video id="v" autoplay playsinline></video>
+  <div id="idle">
+    <div class="small">Share your screen here: open</div>
+    <div class="small" id="addr"></div>
+    <div class="small" style="margin-top:14px">and enter the code</div>
+    <div class="big" id="code"></div>
+    <div class="tiny" id="st">Starting…</div>
+  </div>
+  <script>
+  (function () {
+    var m = location.hash.match(/code=([A-Za-z0-9]+)/), code = m ? m[1].toUpperCase() : "";
+    var v = document.getElementById("v"), idle = document.getElementById("idle"), stEl = document.getElementById("st");
+    document.getElementById("code").textContent = code || "—";
+    document.getElementById("addr").textContent = new URL("share.html", location.href).href.replace(/^https?:\/\//, "").replace(/#.*$/, "");
+    var state = "starting", peer = null, conn = null, gotAt = 0;
+    function st(s, text) { state = s; stEl.textContent = text; report(); }
+    function report() {
+      try { if (window.O && typeof window.O.sendMessage === "function")
+        window.O.sendMessage("app", JSON.stringify({ from: "ss", state: state, code: code, w: v.videoWidth || 0, h: v.videoHeight || 0, audio: !!(v.srcObject && v.srcObject.getAudioTracks().length) })); } catch (e) {}
+    }
+    setInterval(report, 2000);
+
+    function showIdle() { v.style.display = "none"; idle.style.display = "flex"; }
+    function showVideo(stream) {
+      v.srcObject = stream; v.muted = false;
+      var p = v.play();
+      if (p && p.catch) p.catch(function () { v.muted = true; v.play().catch(function () {}); });   // if sound isn't allowed yet, at least show it
+      v.style.display = "block"; idle.style.display = "none"; gotAt = Date.now();
+      st("showing", "Showing");
+    }
+
+    // Volume from the world (glides, like the other players)
+    var vt = null, vn = null;
+    setInterval(function () { if (vt === null) return; if (vn === null) vn = vt; vn += (vt - vn) * 0.15; if (Math.abs(vt - vn) < 0.004) vn = vt; v.volume = Math.max(0, Math.min(1, vn)); }, 50);
+    window.__ssVol = function (x) { if (isFinite(x)) vt = x; };
+
+    function start() {
+      if (!code) { st("nocode", "No code"); return; }
+      peer = new Peer();
+      peer.on("open", function () { st("waiting", "Waiting for someone to share…"); connect(); });
+      peer.on("call", function (call) {             // the sharer sends the picture
+        call.answer();
+        call.on("stream", showVideo);
+        call.on("close", function () { showIdle(); st("waiting", "Sharing stopped. Waiting…"); });
+      });
+      peer.on("error", function (e) {
+        if (e.type === "peer-unavailable") st("waiting", "Waiting for someone to share…");
+        else st("error", "Connection problem: " + e.type);
+      });
+      peer.on("disconnected", function () { try { peer.reconnect(); } catch (e) {} });
+    }
+    function connect() {
+      if (!peer || peer.destroyed) return;
+      if (conn && conn.open) return;
+      conn = peer.connect("bsss-" + code.toLowerCase(), { reliable: true });
+      conn.on("close", function () { conn = null; showIdle(); st("waiting", "Sharing stopped. Waiting…"); });
+    }
+    // Keep trying until someone shares (and again after they stop)
+    var lastAgain = 0;
+    setInterval(function () {
+      if (!conn || !conn.open) { connect(); return; }
+      if (state !== "showing" && Date.now() - lastAgain > 9000) { lastAgain = Date.now(); try { conn.send("again"); } catch (e) {} }   // connected but no picture yet: ask again
+    }, 3000);
+    start();
+  })();
+  </script>
+</body>
+</html>

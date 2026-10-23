@@ -1,0 +1,99 @@
+<!doctype html>
+<!-- Screen Share (test): open this on a computer to share a screen, window or tab into a world. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Share your screen into the world</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    :root { --bg: #15131b; --card: #211e2a; --text: #f4f2f8; --dim: #a59fb3; --accent: #e0457b; --ok: #3ccf8e; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font: 16px/1.5 -apple-system, system-ui, sans-serif;
+           display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .card { width: 100%; max-width: 560px; background: var(--card); border-radius: 18px; padding: 28px; }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    p { margin: 0 0 18px; color: var(--dim); }
+    label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 6px; letter-spacing: .04em; text-transform: uppercase; }
+    input { width: 100%; font: 600 28px/1 ui-monospace, monospace; letter-spacing: .2em; text-transform: uppercase; text-align: center;
+            padding: 14px; border-radius: 12px; border: 2px solid #3a3546; background: #18161f; color: var(--text); }
+    button { width: 100%; margin-top: 14px; padding: 14px; font: 600 17px system-ui, sans-serif; border: 0; border-radius: 12px;
+             background: var(--accent); color: #fff; cursor: pointer; }
+    button.stop { background: #3a3546; }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { margin-top: 16px; padding: 12px 14px; border-radius: 10px; background: #18161f; color: var(--dim); min-height: 48px; }
+    #status.live { color: var(--ok); }
+    video { width: 100%; margin-top: 16px; border-radius: 10px; background: #000; display: none; }
+    .tip { font-size: 13px; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Share your screen into the world</h1>
+    <p>Type the code shown on the world's screen, then pick what to share.</p>
+    <label for="code">World screen code</label>
+    <input id="code" maxlength="8" autocomplete="off" spellcheck="false" placeholder="ABCDE">
+    <button id="go">Share screen</button>
+    <button id="stop" class="stop" style="display:none">Stop sharing</button>
+    <div id="status">Not sharing.</div>
+    <video id="preview" muted autoplay playsinline></video>
+    <p class="tip">To share sound too, use Chrome or Edge and pick a <b>tab</b>, with "Share tab audio" ticked.
+      Keep this page open while you share.</p>
+  </div>
+  <script>
+  (function () {
+    var codeEl = document.getElementById("code"), go = document.getElementById("go"), stopBtn = document.getElementById("stop");
+    var statusEl = document.getElementById("status"), preview = document.getElementById("preview");
+    var q = new URLSearchParams(location.search).get("code");
+    if (q) codeEl.value = q.toUpperCase();
+    var peer = null, stream = null, viewers = {}, calls = {};
+    function status(t, live) { statusEl.textContent = t; statusEl.className = live ? "live" : ""; }
+    function count() { return Object.keys(viewers).length; }
+    function showCount() { if (stream) status("Sharing. " + count() + " screen" + (count() === 1 ? "" : "s") + " in the world " + (count() === 1 ? "is" : "are") + " showing it.", true); }
+
+    function callViewer(id) {
+      if (!stream || !peer) return;
+      try { if (calls[id]) calls[id].close(); } catch (e) {}
+      var c = peer.call(id, stream);
+      calls[id] = c;
+      c.on("close", function () { delete calls[id]; });
+      c.on("error", function () { delete calls[id]; });
+    }
+
+    go.onclick = async function () {
+      var code = (codeEl.value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (code.length < 4) { status("Type the code from the world's screen first."); return; }
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: true });
+      } catch (e) { status("Sharing was cancelled."); return; }
+      preview.srcObject = stream; preview.style.display = "block";
+      stream.getVideoTracks()[0].addEventListener("ended", stop);
+      go.disabled = true; codeEl.disabled = true; stopBtn.style.display = "block";
+      status("Connecting…");
+      peer = new Peer("bsss-" + code.toLowerCase());
+      peer.on("open", function () { status("Sharing. Waiting for the world's screens to connect…", true); });
+      peer.on("connection", function (conn) {        // a screen in the world says hello: send it the picture
+        conn.on("open", function () { viewers[conn.peer] = conn; callViewer(conn.peer); showCount(); });
+        conn.on("close", function () { delete viewers[conn.peer]; showCount(); });
+        conn.on("data", function (d) { if (d === "again") callViewer(conn.peer); });
+      });
+      peer.on("error", function (e) {
+        if (e.type === "unavailable-id") status("Someone is already sharing to that code. Stop theirs first, or use the world's current code.");
+        else status("Connection problem: " + e.type);
+      });
+    };
+
+    function stop() {
+      if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null; viewers = {}; calls = {};
+      if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+      preview.srcObject = null; preview.style.display = "none";
+      go.disabled = false; codeEl.disabled = false; stopBtn.style.display = "none";
+      status("Not sharing.");
+    }
+    stopBtn.onclick = stop;
+    window.addEventListener("beforeunload", stop);
+  })();
+  </script>
+</body>
+</html>
